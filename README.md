@@ -9,9 +9,13 @@ This program listens for sound. If it detects any, it starts recording automatic
 - [listener-2.0.0.tgz](https://www.vanheusden.com/listener/listener-2.0.0.tgz)    (ALSA version)
 - [listener-1.7.2.tgz](https://www.vanheusden.com/listener/listener-1.7.2.tgz)    (old OSS version)
 
-This program needs libsndfile as well as portaudio.
+This program needs [`libsndfile`](http://www.mega-nerd.com/libsndfile/) as well as [portaudio](http://www.portaudio.com/).
 
-Please note that since version 2.0.1 the commandline parameters for selecting e.g. the samplerate have changed. Run with '-h' to see a list.
+```
+$ sudo apt-get install libsndfile-dev portaudio19-dev
+```
+
+Please note that since version 2.0.1 the command line parameters for selecting e.g. the samplerate have changed. Run with '-h' to see a list.
 
 ## Changelog
 
