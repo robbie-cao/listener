@@ -1,0 +1,179 @@
+<HTML>
+<BODY>
+<H1>Listener</H1>
+First install <A HREF="http://www.mega-nerd.com/libsndfile/">libsndfile</A>!<BR>
+Then:
+<PRE>
+make install
+</PRE>
+Then run '<B>setlistener</B>' with as parameter the device to listen to.
+<PRE>
+setlistener /dev/dsp
+</PRE>
+Then, with the left and right arrow keys, move the '|' until the
+word "<silence>" appears. No, don't you move the '|' to the maximum
+right, move it to the right until the "<silence>" just constantly
+appears. Then: remember the value "Current level: ".<BR>
+<BR>
+Next step is creating the file <B>/usr/local/etc/listener.conf</B>
+Copy the example <B>listener.conf</B> to the location mentioned above and
+edit it to suit your needs.<BR>
+For example:
+<PRE>
+wav_path = /home/folkert/recordings
+devname = /dev/dsp
+detect_level = 800
+min_duration = 1
+max_duration = 300
+rec_silence = 5
+sample_rate = 44100
+channels = 1
+compression = ima-adpcm
+format = wav
+from_pipe = 0
+exec = /home/folkert/encode_sample
+prerecord_n_seconds = 3
+</PRE>
+
+<H2>format</H2>
+Format sets what kind of outputfile is generated. Possible are:
+<TABLE BORDER=1>
+<TR><TD><B>Keyword</B></TD><TD><B>Description</B></TD></TR>
+<TR><TD>wav</TD><TD>Microsoft WAV</TD></TR>
+<TR><TD>aiff</TD><TD>Apple/SGI AIFF</TD></TR>
+<TR><TD>au</TD><TD>SUN/NeXT AU</TD></TR>
+<TR><TD>raw</TD><TD>RAW PCM data</TD></TR>
+<TR><TD>svx</TD><TD>Amiga IFF/SVX8/SV16</TD></TR>
+<TR><TD>nist</TD><TD>Sphere NIST</TD></TR>
+<TR><TD>voc</TD><TD>VOC files</TD></TR>
+<TR><TD>ircam</TD><TD>Berkeley/IRCAM/CARL</TD></TR>
+<TR><TD>w64</TD><TD>Sonic Foundry's 64 bit RIFF/WAV</TD></TR>
+<TR><TD>mat4</TD><TD>Matlab v4.2/GNU Octave 2.0</TD></TR>
+<TR><TD>mat5</TD><TD>Matlab v5.0/GNU Octave 2.1</TD></TR>
+<TR><TD>pvf</TD><TD>Portable Voice Format</TD></TR>
+<TR><TD>xi</TD><TD>Fasttracker 2 Extended Instrument</TD></TR>
+<TR><TD>htk</TD><TD>HMM Toolkit format</TD></TR>
+<TR><TD>sds</TD><TD>Midi sample dump standard</TD></TR>
+<TR><TD>avr</TD><TD>Audio Visual Research</TD></TR>
+<TR><TD>wavex</TD><TD>MS WAVE with WAVEFORMATEX</TD></TR>
+</TABLE>
+
+<H2>sample_rate</H2>
+Sets the samplerate at which the samples are recorded.
+Be warned: only the rates supported by your soundcard can be
+entered here!<BR>
+
+<H2>rec_silence</H2>
+When while recording things become silent, don't stop recording immediately
+but keep recording for 'rec_silence' seconds to see if the sound restarts.<BR>
+
+<H2>min_duration</H2>
+When the sound starts, record at least that many seconds of audio, measured
+relative to the start of the recoding.<BR>
+E.g. if the sound only sounds for 3 seconds and you've set this value to 5,
+still at least 5 seconds of audio will be recorded.<BR>
+
+<H2>min_triggers</H2>
+sets how many samples must be above the threshold (the
+'<B>detect_level</B>') before recording starts.
+The samplerate is set to 44.1kHz so if you set min_duration to
+4410, the minimum length (duration) of sound before the recording
+starts is: 0.1s (or: one tenth of a second).<BR>
+
+<H2>max_duration</H2>
+How long a sample may be before a new file is started.<BR>
+
+<H2>one_shot</H2>
+When set to yes/on/1, listener will exit after the first recorded sample.<BR>
+
+<H2>prerecord_n_seconds</H2>
+How many seconds to record <I>before</I> the sound starts.<BR>
+
+<H2>channels</H2>
+Sets the number of channels to record. default is 1 which
+is mono, 2 is stereo. Warning: some soundcards don't support
+mono, listener will then exit with an errormessage.<BR>
+
+<H2>compression</H2>
+sets the compressionmethod. Can be:
+<UL>
+<LI>u-law
+<LI>a-law
+<LI>ima-adpcm
+<LI>ms-adpcm
+<LI>gsm-6.10
+<LI>G721_32 (32kbit)
+<LI>G723_24 (24kbit)
+<LI>G723_40 (40kbit)
+</UL>
+If you omit the compression-line completely, no compression is
+used.<BR>
+
+<H2>from_pipe</H2>
+sets wether listener is reading from a pipe fed by
+<B>listenersoundpipe</B>. <B>listenersoundpipe</B> lets you split a sound-
+device in two so that you can check 2 rooms with only one sound-
+card. You need to create two pipes and start 2 listener processes,
+each reading from one pipe.<BR>
+Set this parameter to yes/on/1 for "pipe-mode", no/off/0 for normal mode.
+
+<H2>exec</H2>
+selects the script/program to execute after the sample was
+recorded. This first (and only) parameter for that script is the
+filename of the sample.<BR>
+
+<H2>on_event_start</H2>
+selects the script/program to execute before the sample was recorded.<BR>
+
+<H2>output_pipe</H2>
+Instead of writing to a wav-file, listener can also execute an external
+program which does the compression and/or file-I/O.<BR>
+e.g.:
+<PRE>
+output_pipe=bladeenc -rawstereo -rawsigned -rawchannels=2 STDIN /tmp/my_file.mp3
+</PRE>
+
+<H2>filter</H2>
+lets you add one or more filters. these will be used when
+detecting sounds. beware: sound is written to the wav-files BEFORE
+the filtering is done. See the directory '<I>filter_lib_example</I>' for
+an example on how to write a filter for listener.<BR>
+
+<H2>amplify</H2>
+Wether to automatically amplify the sound or not. Use 'on' and 'off' to
+toggle.<BR>
+
+<H2>start_amplify</H2>
+What amplification to use when the sound starts. This will be adjusted
+to something more applicable UNLESS 'fixed_amplify' is set to yes.<BR>
+
+<H2>max_amplify</H2>
+Maximum amplification to use.<BR>
+
+<H2>fixed_amplify</H2>
+Wether to ONLY use the amplification factor set with 'start_amplify'
+(=yes) or let listener do autotuning (=no).<BR>
+
+<B>safe_after_filter</B>sets wether to save the audio-data to disk
+before or after the filtering. Before the filtering gives you the
+original sound while after gives you the sound after processing
+with the filter(s).<BR>
+Enter '<B>on</B>' or '<B>off</B>'.<BR>
+
+<BR>
+The final step is starting the program:
+<PRE>
+listener
+</PRE>
+and that's it!<BR>
+
+<BR>
+Thanks to Hugo <A HREF="mailto:hugo@homebaze.net">Hugo</A> for adding code that enables
+you to set some parameters from the commandline.<BR>
+
+<BR>
+If you have any suggestions or anything else, do not hesitate
+to contact me at the following e-mail address:<BR>
+<A HREF="folkert@vanheusden.com">folkert@vanheusden.com</A><BR>
+</BODY>
+</HTML>
