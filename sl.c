@@ -10,7 +10,10 @@
 #include <ctype.h>
 #include <string.h>
 #include <dlfcn.h>
-#include "alsa.h"
+
+#include <portaudio.h>
+
+#include "paudio.h"
 #include "listener.h"
 #include "error.h"
 #include "utils.h"
@@ -43,8 +46,7 @@ void init_curses(void)
 int main(int argc, char *argv[])
 {
 	WINDOW *win;
-	snd_pcm_t *pcm_handle;
-	char *pcm_name = "hw:1";
+	PaStream *pcm_handle;
 	int level = 0, prevlevel = -1;
 	int detect_level = 0;
 	char *configfile = CONFIGFILE;
@@ -53,16 +55,6 @@ int main(int argc, char *argv[])
 	short *buffer;
 	int buffer_size, rc;
 	int rate = SAMPLE_RATE, channels = 1;
-
-	/* determine device to open */
-	if (argc > 1)
-	{
-		pcm_name = argv[1];
-		if (argc > 2)
-			configfile = argv[2];
-	}
-	else if (argc > 3)
-		error_exit("Usage: %s device\n", argv[0]);
 
 	/* load configfile */
         fh = fopen(configfile, "rb");
@@ -100,8 +92,6 @@ int main(int argc, char *argv[])
 
 				dlerror();
 
-				if (dummy) *dummy = 0x00;
-
                                 filters[n_filter_lib].library = dlopen(par, RTLD_NOW);
                                 if (!filters[n_filter_lib].library)
                                         error_exit("Failed to load filter library %s, reason: %s\n", par, dlerror());
@@ -114,7 +104,10 @@ int main(int argc, char *argv[])
                                 if (!filters[n_filter_lib].do_filter)
                                         error_exit("The filter library %s is missing the 'do_library' function");
 
-				filters[n_filter_lib].par = dummy+1 ? strdup(dummy+1) : NULL;
+                                filters[n_filter_lib].par = NULL;
+                                dummy = strchr(par, ' ');
+				if (dummy)
+                                	filters[n_filter_lib].par = *(dummy+1) ? strdup(dummy+1) : NULL;
 
 				n_filter_lib++;
                         }
@@ -126,6 +119,9 @@ int main(int argc, char *argv[])
                 free(line);
         }
         fclose(fh);
+
+	/* open audio-device */
+	pcm_handle = paudio_init (&rate, channels);
 
 	/* start curses library */
 	init_curses();
@@ -169,9 +165,6 @@ int main(int argc, char *argv[])
 
 	mvwprintw(win, 22, 42, "(C) 2003-2010 folkert@vanheusden.com");
 
-	/* open audio-device */
-	pcm_handle = init_alsa(pcm_name, &rate, channels);
-
         /* initialize filters */
         for(loop=0; loop<n_filter_lib; loop++)
         {
@@ -179,7 +172,7 @@ int main(int argc, char *argv[])
         }
 
 	buffer_size = rate * sizeof(short);
-	buffer = (short *)malloc(buffer_size);
+	buffer = (short *) malloc(buffer_size);
 	if (!buffer)
 		error_exit("out of memory!");
 
@@ -209,7 +202,7 @@ int main(int argc, char *argv[])
 
 		/* check audio-level */
 		/* read data */
-		get_audio_1s(pcm_handle, buffer, rate, channels);
+		paudio_get_1s (pcm_handle, buffer, rate, channels);
 
 		/* init structure which makes select() wait for one tenth of a second */
 	sel:

@@ -26,42 +26,17 @@ detect_level = 800
 min_duration = 1
 max_duration = 300
 rec_silence = 5
-sample_rate = 44100
-channels = 1
-compression = ima-adpcm
-format = wav
+audio_parameters = 44.1khz,1,wav,pcm16
 from_pipe = 0
 exec = /home/folkert/encode_sample
 prerecord_n_seconds = 3
 </PRE>
 
-<H2>format</H2>
-Format sets what kind of outputfile is generated. Possible are:
-<TABLE BORDER=1>
-<TR><TD><B>Keyword</B></TD><TD><B>Description</B></TD></TR>
-<TR><TD>wav</TD><TD>Microsoft WAV</TD></TR>
-<TR><TD>aiff</TD><TD>Apple/SGI AIFF</TD></TR>
-<TR><TD>au</TD><TD>SUN/NeXT AU</TD></TR>
-<TR><TD>raw</TD><TD>RAW PCM data</TD></TR>
-<TR><TD>svx</TD><TD>Amiga IFF/SVX8/SV16</TD></TR>
-<TR><TD>nist</TD><TD>Sphere NIST</TD></TR>
-<TR><TD>voc</TD><TD>VOC files</TD></TR>
-<TR><TD>ircam</TD><TD>Berkeley/IRCAM/CARL</TD></TR>
-<TR><TD>w64</TD><TD>Sonic Foundry's 64 bit RIFF/WAV</TD></TR>
-<TR><TD>mat4</TD><TD>Matlab v4.2/GNU Octave 2.0</TD></TR>
-<TR><TD>mat5</TD><TD>Matlab v5.0/GNU Octave 2.1</TD></TR>
-<TR><TD>pvf</TD><TD>Portable Voice Format</TD></TR>
-<TR><TD>xi</TD><TD>Fasttracker 2 Extended Instrument</TD></TR>
-<TR><TD>htk</TD><TD>HMM Toolkit format</TD></TR>
-<TR><TD>sds</TD><TD>Midi sample dump standard</TD></TR>
-<TR><TD>avr</TD><TD>Audio Visual Research</TD></TR>
-<TR><TD>wavex</TD><TD>MS WAVE with WAVEFORMATEX</TD></TR>
-</TABLE>
-
-<H2>sample_rate</H2>
-Sets the samplerate at which the samples are recorded.
-Be warned: only the rates supported by your soundcard can be
-entered here!<BR>
+<H2>audio_parameters</H2>
+Format sets what kind of outputfile is generated AND how the sound is recorded.<BR>
+Run listener with -h to get a list of parameters.<BR>
+In any order you can set the samplerate (e.g. 44100 or 22.05khz), the number of channels, the output-file-type, the file subtype (e.g. 16 bit or adpcm compressed).<BR>
+<BR>
 
 <H2>rec_silence</H2>
 When while recording things become silent, don't stop recording immediately
@@ -88,26 +63,6 @@ When set to yes/on/1, listener will exit after the first recorded sample.<BR>
 
 <H2>prerecord_n_seconds</H2>
 How many seconds to record <I>before</I> the sound starts.<BR>
-
-<H2>channels</H2>
-Sets the number of channels to record. default is 1 which
-is mono, 2 is stereo. Warning: some soundcards don't support
-mono, listener will then exit with an errormessage.<BR>
-
-<H2>compression</H2>
-sets the compressionmethod. Can be:
-<UL>
-<LI>u-law
-<LI>a-law
-<LI>ima-adpcm
-<LI>ms-adpcm
-<LI>gsm-6.10
-<LI>G721_32 (32kbit)
-<LI>G723_24 (24kbit)
-<LI>G723_40 (40kbit)
-</UL>
-If you omit the compression-line completely, no compression is
-used.<BR>
 
 <H2>from_pipe</H2>
 sets wether listener is reading from a pipe fed by

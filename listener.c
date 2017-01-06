@@ -8,16 +8,17 @@
 #include <signal.h>
 #include <limits.h>
 #include <time.h>
-#include <syslog.h>
 #include <string.h>
 #include <dlfcn.h>
 #include <math.h>
 
 extern char *optarg;
 
+#include <portaudio.h>
 #include <sndfile.h>
 
-#include "alsa.h"
+#include "paudio.h"
+#include "sndfile_pars.h"
 #include "listener.h"
 #include "error.h"
 #include "utils.h"
@@ -32,14 +33,12 @@ double rec_silence = 1;					/* number of seconds to keep on reading when silence
 double min_duration = 1;				/* minimum length of a recording */
 double max_duration = -1;				/* max. duration IN SECONDS(!) of one file */
 int min_triggers = 2;					/* how many times the signal should be above the trigger level */
-int compression = SF_FORMAT_PCM_16;			/* default is no compression */
-int format = SF_FORMAT_WAV;				/* default is WAV output */
 char *exec = NULL;					/* what to execute after recording */
 char *on_event_start = NULL;				/* what to exec when the recording starts */
 char amplify = 1;					/* default amplify is on */
 double start_amplify = 1.0;				/* start factor */
 double max_amplify = 2.0;				/* maximum amplify factor */
-char do_not_fork = 0;					/* wether to fork into the background or not */
+char do_not_fork = 1;					/* wether to fork into the background or not */
 int pr_n_seconds = 2;					/* number of seconds to record before the sound starts */
 int silent = 0;						/* be silent on stdout? */
 char fixed_ampl_fact = 0;				/* use fixed amplification factor? */
@@ -55,6 +54,8 @@ char safe_after_filter = 0;
 
 char do_exit = 0;
 
+void record(PaStream *pcm_handle, int cur_buffer, SF_INFO *file_pars);
+
 void gettime(double *dst)
 {
 	struct timezone tz;
@@ -62,78 +63,15 @@ void gettime(double *dst)
 
 	if (gettimeofday(&tv, &tz) == -1)
 	{
-		syslog(LOG_CRIT, "error obtaining timestamp: %m");
+		error_syslog ("CRITICAL: error obtaining timestamp: %m");
 		exit(1);
 	}
 
 	*dst = ((double)tv.tv_sec) + ((double)tv.tv_usec) / 1000000.0;
 }
 
-int get_compression_type( const char *pcCompression )
+void start_wavfile(SNDFILE **sndfile_out, char *fname, SF_INFO *pars)
 {
-	if (strcasecmp(pcCompression, "u-law") == 0)
-		return SF_FORMAT_ULAW;
-	if (strcasecmp(pcCompression, "a-law") == 0)
-		return SF_FORMAT_ALAW;
-	if (strcasecmp(pcCompression, "IMA-ADPCM") == 0)
-		return SF_FORMAT_IMA_ADPCM;
-	if (strcasecmp(pcCompression, "MS-ADPCM") == 0)
-		return SF_FORMAT_MS_ADPCM;
-	if (strcasecmp(pcCompression, "GSM-6.10") == 0)
-		return SF_FORMAT_GSM610;
-	if (strcasecmp(pcCompression, "G721_32") == 0)
-		return SF_FORMAT_G721_32;
-	if (strcasecmp(pcCompression, "G723_24") == 0)
-		return SF_FORMAT_G723_24;
-	if (strcasecmp(pcCompression, "G723_40") == 0)
-		return SF_FORMAT_G723_40;
-
-	return -1;
-} /* int get_compression_type( ) */
-
-int get_format_type(const char *type)
-{
-	if (strcasecmp(type, "wav") == 0)
-		return SF_FORMAT_WAV;
-	if (strcasecmp(type, "aiff") == 0)
-		return SF_FORMAT_AIFF;
-	if (strcasecmp(type, "au") == 0)
-		return SF_FORMAT_AU;
-	if (strcasecmp(type, "raw") == 0)
-		return SF_FORMAT_RAW;
-	if (strcasecmp(type, "svx") == 0)
-		return SF_FORMAT_SVX;
-	if (strcasecmp(type, "nist") == 0)
-		return SF_FORMAT_NIST;
-	if (strcasecmp(type, "voc") == 0)
-		return SF_FORMAT_VOC;
-	if (strcasecmp(type, "ircam") == 0)
-		return SF_FORMAT_IRCAM;
-	if (strcasecmp(type, "w64") == 0)
-		return SF_FORMAT_W64;
-	if (strcasecmp(type, "mat4") == 0)
-		return SF_FORMAT_MAT4;
-	if (strcasecmp(type, "mat5") == 0)
-		return SF_FORMAT_MAT5;
-	if (strcasecmp(type, "pvf") == 0)
-		return SF_FORMAT_PVF;
-	if (strcasecmp(type, "xi") == 0)
-		return SF_FORMAT_XI;
-	if (strcasecmp(type, "htk") == 0)
-		return SF_FORMAT_HTK;
-	if (strcasecmp(type, "sds") == 0)
-		return SF_FORMAT_SDS;
-	if (strcasecmp(type, "avr") == 0)
-		return SF_FORMAT_AVR;
-	if (strcasecmp(type, "wavex") == 0)
-		return SF_FORMAT_WAVEX;
-
-	return -1;
-}
-
-void start_wavfile(SNDFILE **sndfile_out, char *fname, int sample_rate, int channels)
-{
-	SF_INFO sfinfo_out;
 	time_t now;
 	char *ts, *dummy;
 	struct tm *tmdummy;
@@ -154,39 +92,39 @@ void start_wavfile(SNDFILE **sndfile_out, char *fname, int sample_rate, int chan
 			if (fname_template[loop] == '%')
 			{
 				switch(fname_template[++loop]) {
-				case 'h':		/* hostname */
-					if (gethostname(&fname[index], PATH_MAX - index) == -1)
-					{
-						syslog(LOG_CRIT, "Error finding hostname: %m");
-						exit(1);
-					}
-					break;
-				case 'H':		/* hour */
-					sprintf(&fname[index], "%02d", tmdummy -> tm_hour);
-					break;
-				case 'M':		/* minutes */
-					sprintf(&fname[index], "%02d", tmdummy -> tm_min);
-					break;
-				case 'S':		/* seconds */
-					sprintf(&fname[index], "%02d", tmdummy -> tm_sec);
-					break;
-				case 's':		/* seconds since epoch*/
-					sprintf(&fname[index], "%d", (int)now);
-					break;
-				case 'y':		/* year */
-					sprintf(&fname[index], "%02d", tmdummy -> tm_year + 1900);
-					break;
-				case 'm':		/* month */
-					sprintf(&fname[index], "%02d", tmdummy -> tm_mon + 1);
-					break;
-				case 'd':		/* day */
-					sprintf(&fname[index], "%02d", tmdummy -> tm_mday);
-					break;
-				case '%':
-					strcat(&fname[index], "%%");
-					break;
-				default:
-					syslog(LOG_ERR, "%%%c is unknown", fname_template[loop]);
+					case 'h':		/* hostname */
+						if (gethostname(&fname[index], PATH_MAX - index) == -1)
+						{
+							error_syslog ("CRITICAL: Error finding hostname: %m");
+							exit(1);
+						}
+						break;
+					case 'H':		/* hour */
+						sprintf(&fname[index], "%02d", tmdummy -> tm_hour);
+						break;
+					case 'M':		/* minutes */
+						sprintf(&fname[index], "%02d", tmdummy -> tm_min);
+						break;
+					case 'S':		/* seconds */
+						sprintf(&fname[index], "%02d", tmdummy -> tm_sec);
+						break;
+					case 's':		/* seconds since epoch*/
+						sprintf(&fname[index], "%d", (int)now);
+						break;
+					case 'y':		/* year */
+						sprintf(&fname[index], "%02d", tmdummy -> tm_year + 1900);
+						break;
+					case 'm':		/* month */
+						sprintf(&fname[index], "%02d", tmdummy -> tm_mon + 1);
+						break;
+					case 'd':		/* day */
+						sprintf(&fname[index], "%02d", tmdummy -> tm_mday);
+						break;
+					case '%':
+						strcat(&fname[index], "%%");
+						break;
+					default:
+						error_syslog ("ERROR: %%%c is unknown", fname_template[loop]);
 				}
 
 				index = strlen(fname);
@@ -200,22 +138,18 @@ void start_wavfile(SNDFILE **sndfile_out, char *fname, int sample_rate, int chan
 	}
 	else
 	{
-		sprintf(fname, "%s/%04d-%02d-%02d_%02d%02d%02d.wav",
-			wav_path,
-			tmdummy -> tm_year + 1900,
-			tmdummy -> tm_mon + 1,
-			tmdummy -> tm_mday,
-			tmdummy -> tm_hour,
-			tmdummy -> tm_min,
-			tmdummy -> tm_sec);
+		sprintf(fname, "%s/%04d-%02d-%02d_%02d:%02d:%02d.wav",
+				wav_path,
+				tmdummy -> tm_year + 1900,
+				tmdummy -> tm_mon + 1,
+				tmdummy -> tm_mday,
+				tmdummy -> tm_hour,
+				tmdummy -> tm_min,
+				tmdummy -> tm_sec);
 	}
 
 	/* create file */
-	memset(&sfinfo_out, 0x00, sizeof(sfinfo_out));
-        sfinfo_out.samplerate = sample_rate;
-        sfinfo_out.channels = channels;
-        sfinfo_out.format = format | compression;
-        *sndfile_out = sf_open(fname, SFM_WRITE, &sfinfo_out);
+	*sndfile_out = sf_open(fname, SFM_WRITE, pars);
 	if (!*sndfile_out)
 		error_exit("Could not create file %s!", fname);
 
@@ -227,7 +161,7 @@ void start_wavfile(SNDFILE **sndfile_out, char *fname, int sample_rate, int chan
 	if (dummy) *dummy = 0x00;
 	(void)sf_set_string(*sndfile_out, SF_STR_DATE, ts);
 
-	syslog(LOG_INFO, "Started recording to %s", fname);
+	error_syslog ("INFO: Started recording to %s", fname);
 	if (do_not_fork) printf("Started recording to %s\n", fname);
 }
 
@@ -237,14 +171,14 @@ void start_wav_file_processor(char *fname)
 	{
 		pid_t pid;
 
-		syslog(LOG_INFO, "Starting childprocess: %s", exec);
+		error_syslog ("INFO: Starting childprocess: %s", exec);
 		if (do_not_fork) printf("Starting childprocess: %s\n", exec);
 
 		pid = fork();
 
 		if (pid == -1)
 		{
-			syslog(LOG_ERR, "Failed to fork! %m");
+			error_syslog ("ERROR: Failed to fork! %m");
 		}
 		else if (pid == 0)
 		{
@@ -260,14 +194,14 @@ void start_on_event_start(void)
 	{
 		pid_t pid;
 
-		syslog(LOG_INFO, "Starting childprocess: %s", exec);
+		error_syslog ("INFO: Starting childprocess: %s", exec);
 		if (do_not_fork) printf("Starting childprocess: %s\n", exec);
 
 		pid = fork();
 
 		if (pid == -1)
 		{
-			syslog(LOG_ERR, "Failed to fork! %m");
+			error_syslog ("ERROR: Failed to fork! %m");
 		}
 		else if (pid == 0)
 		{
@@ -346,28 +280,30 @@ int start_piped_proc(char *what)
 	return fds[1];
 }
 
-void record(snd_pcm_t *pcm_handle, int cur_buffer, int sample_rate, int channels)
+void record(PaStream *pcm_handle, int cur_buffer, SF_INFO *file_pars)
 {
 	SNDFILE *sndfile_out = NULL;
 	char fname[PATH_MAX];
 	double start_of_recording_ts, sound_detected_ts, start_of_wavfile_ts, now_ts;
 	short *buffer, *temp_buffer = NULL;
 	double factor = start_amplify;
+	int sample_rate = file_pars -> samplerate;
+	int channels = file_pars -> channels;
 	int buffer_size = sample_rate * channels * sizeof(short);
 	int loop;
 	int pipe_fd = -1;
 
 	start_on_event_start();
 
-	buffer = (short *)mymalloc(buffer_size, "recording buffer(2)");
-	if (!safe_after_filter) temp_buffer = (short *)mymalloc(buffer_size, "recording buffer(3)");
+	buffer = (short *) mymalloc (2 * buffer_size, "recording buffer(2)");
+	if (!safe_after_filter) temp_buffer = (short *) mymalloc (2 * buffer_size, "recording buffer(3)");
 
 	if (!silent && do_not_fork) printf("Sound detected\n");
 
 	if (output_pipe)
 		pipe_fd = start_piped_proc(output_pipe);
 	else
-		start_wavfile(&sndfile_out, fname, sample_rate, channels);
+		start_wavfile(&sndfile_out, fname, file_pars);
 
 	gettime(&start_of_recording_ts);
 	start_of_wavfile_ts = sound_detected_ts = now_ts = start_of_recording_ts;
@@ -393,7 +329,7 @@ void record(snd_pcm_t *pcm_handle, int cur_buffer, int sample_rate, int channels
 		else
 		{
 			if ((n_wr = sf_write_short(sndfile_out, p_cur_buffer, sample_rate * channels)) != (sample_rate * channels))
-				error_exit("failed to write to wav-file: %s (%d)\n", sf_strerror(sndfile_out), n_wr);
+				error_exit ("failed to write to wav-file: %s (%d)\n", sf_strerror(sndfile_out), n_wr);
 		}
 	}
 
@@ -405,7 +341,7 @@ void record(snd_pcm_t *pcm_handle, int cur_buffer, int sample_rate, int channels
 		int loop, threshold_count = 0;
 
 		/* read sample */
-		get_audio_1s(pcm_handle, buffer, sample_rate, channels);
+		paudio_get_1s (pcm_handle, buffer, sample_rate, channels);
 
 		/* when we want to save unfiltered sound, make a copy first */
 		if (!safe_after_filter)
@@ -414,7 +350,7 @@ void record(snd_pcm_t *pcm_handle, int cur_buffer, int sample_rate, int channels
 		}
 
 		/* do filters (if any) */
-		for(loop=0; loop<n_filter_lib; loop++)
+		for(loop=0; loop < n_filter_lib; loop++)
 		{
 			printf("* filter * ");
 			filter[loop].do_filter(filter[loop].lib_data, (void *)buffer, sample_rate);
@@ -472,7 +408,7 @@ void record(snd_pcm_t *pcm_handle, int cur_buffer, int sample_rate, int channels
 			start_wav_file_processor(fname);
 
 			if (!output_pipe)
-				start_wavfile(&sndfile_out, fname, sample_rate, channels);
+				start_wavfile(&sndfile_out, fname, file_pars);
 
 			start_of_wavfile_ts = now_ts;
 		}
@@ -499,7 +435,7 @@ void record(snd_pcm_t *pcm_handle, int cur_buffer, int sample_rate, int channels
 	if (pipe_fd != -1)
 		close(pipe_fd);
 
-	syslog(LOG_INFO, "Stopped recording (%d seconds)", (int)(now_ts - start_of_recording_ts));
+	error_syslog ("INFO: Stopped recording (%d seconds)", (int)(now_ts - start_of_recording_ts));
 	if (do_not_fork) printf("Stopped recording (%d seconds)\n", (int)(now_ts - start_of_recording_ts));
 }
 
@@ -512,22 +448,42 @@ void sigh(int sig)
 
 void usage(void)
 {
+	sf_key_value_t *formats = sf_get_formats();
+	sf_key_value_t *subtypes = sf_get_subtypes();
+	int index=0;
+
 	printf( "\n"
-		"Usage: listener [options]\n"
-		"-C<compression>  Set WAV compression    -e<command>      Script to call after recording\n"
-		"-r<rate>         Sample rate            -m<min_duration> Mini. duration to record (samples)\n"
-		"-b<rec_silence>  how many seconds to keep recording after no sound is heard\n"
-		"-c<configfile>   Configfile to use      -x<max_duration> Max. duration to record (seconds)\n"
-		"-w<wave-dir>     Where to write .WAVs   -d<device>       DSP device to use (hw:0)\n"
-		"-z<channels>     Number of channels (1 (default) or 2)\n"
-		"-t<format>       Output format (see manual)\n"
-		"-y<command>      Script to call as soon as the recording starts\n"
-		"-F               use a fixed amplification factor\n"
-		"-p               Read from pipe (together with splitaudio)\n"
-		"-f               don't fork into the background\n"
-		"-l<detect_level> Detect level           -a<pidfile>      file to write the pid in\n"
-		"-s               Be silent              -h               This help text\n\n"
-		"-o               exit after 1 recording\n");
+			"Usage: listener [options]\n"
+			"-c<configfile>   Configfile to use\n"
+			"-l<detect_level> Detect level\n"
+			"-m<min_duration> Min. duration to record (samples)\n"
+			"-b<rec_silence>  how many seconds to keep recording after no sound is heard\n"
+			"-x<max_duration> Max. duration to record (seconds)\n"
+			"-S<pars>         Sets the sample rate, number of channels, output file type, etc\n"
+			"                 e.g.: 44100,1,wav\n"
+			"                   or: 2,ima_adpcm,10khz\n"
+			"                 see below for a list of fileformats and subtypes\n"
+			"-F               use a fixed amplification factor\n"
+			"-o               exit after 1 recording\n"
+			"-w<wave-dir>     Where to write .WAVs\n"
+			"-p               Read from pipe (together with splitaudio)\n"
+			"-y<command>      Script to call as soon as the recording starts\n"
+			"-e<command>      Script to call after recording\n"
+			"-f               fork into the background\n"
+			"-a<pidfile>      file to write the pid in\n"
+			"-s               Be silent\n"
+			"-h               This help text\n"
+			);
+
+	printf("Supported file formats: ");
+	while(formats[index].key != NULL)
+		printf("%s, ", formats[index++].key);
+	printf("\n");
+	index=0;
+	printf("Supported sub-types: ");
+	while(subtypes[index].key != NULL)
+		printf("%s, ", subtypes[index++].key);
+	printf("\n");
 }
 
 int main(int argc, char *argv[])
@@ -535,142 +491,113 @@ int main(int argc, char *argv[])
 	int	c;
 	char	show_help = 0;
 	char	from_pipe = 0;
-	char	set_from_pipe = 0, set_sample_rate = 0, set_detect_level = 0, set_max_duration = 0, set_rec_silence = 0, 
-		set_min_duration = 0, set_compression = 0, set_exec = 0, set_dev_name = 0, set_wav_path = 0, set_channels = 0,
-		set_format = 0, set_faf = 0, set_on_event_start = 0, set_pidfile = 0, set_one_shot = 0, set_output_pipe = 0;
+	char	set_from_pipe = 0, set_detect_level = 0, set_max_duration = 0, set_rec_silence = 0, 
+		set_min_duration = 0, set_exec = 0, set_wav_path = 0, set_audio_parameters = 0,
+		set_faf = 0, set_on_event_start = 0, set_pidfile = 0, set_one_shot = 0, set_output_pipe = 0;
 	int	loop;
 	FILE	*fh;
-	snd_pcm_t	*pcm_handle;
-	char	*pcm_name = "hw:0";
-	int	sample_rate = SAMPLE_RATE;				/* speaks for itself */
-	char	channels = 1;					/* mono or stereo */
-	/* right now I'm not sure if a short is always 2 bytes. check this on your
-	 * platform
-	 */
-	int	cur_buffer = 0;
+	PaStream *pcm_handle;
+	SF_INFO *audio_pars = NULL, dummy_apars;
+
+	memset(&dummy_apars, 0x00, sizeof(dummy_apars));
+	dummy_apars.samplerate = 44100;
+	dummy_apars.channels = 1;
+	dummy_apars.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
 
 	/* Check command-line options;
 	 */
-	while ( (c = getopt( argc, argv, "oy:b:c:shS::r:l:m:C:e:w:d:x:t:fpz:Fa:" )) != -1 )
+	while ( (c = getopt( argc, argv, "oy:b:c:shS:l:m:e:w:d:x:fpFa:" )) != -1 )
 	{
 		switch (c)
 		{
-	          case 'o':
-			one_shot = 1;
-			set_one_shot = 1;
-			break;
+			case 'S':
+				audio_pars = sf_parse_settings(optarg);
+				set_audio_parameters = 1;
+				break;
 
-		  case 'a':	/* pidfile */
-			set_pidfile = 1;
-			pidfile = optarg;
-			break;
+			case 'o':
+				one_shot = 1;
+				set_one_shot = 1;
+				break;
 
-		  case 'f':	/* do not fork */
-			do_not_fork = 1;
-			break;
+			case 'a':	/* pidfile */
+				set_pidfile = 1;
+				pidfile = optarg;
+				break;
 
-		  case 'w':	/* WAV directory */
-			wav_path = optarg;
-			set_wav_path = 1;
-		 	break;
+			case 'f':	/* do not fork */
+				do_not_fork = 0;
+				break;
 
-		  case 'd':	/* Device */
-			pcm_name = optarg;
-			set_dev_name = 1;
-			break;
+			case 'w':	/* WAV directory */
+				wav_path = optarg;
+				set_wav_path = 1;
+				break;
 
-		  case 'b':	/* rec_silence */
-			rec_silence = atof(optarg);
-			set_rec_silence = 1;
-			break;
+			case 'b':	/* rec_silence */
+				rec_silence = atof(optarg);
+				set_rec_silence = 1;
+				break;
 
-		  case 'e':	/* Exec */
-			exec = optarg;
-			set_exec = 1;
-			break;
+			case 'e':	/* Exec */
+				exec = optarg;
+				set_exec = 1;
+				break;
 
-		  case 'y':	/* on_event_start */
-			on_event_start = optarg;
-			set_on_event_start = 1;
-			break;
+			case 'y':	/* on_event_start */
+				on_event_start = optarg;
+				set_on_event_start = 1;
+				break;
 
-		  case 'F':	/* use fixed amplification factor */
-			fixed_ampl_fact = 1;
-			set_faf = 1;
-			break;
+			case 'F':	/* use fixed amplification factor */
+				fixed_ampl_fact = 1;
+				set_faf = 1;
+				break;
 
-		  case 'C':	/* Compression */
-			if ((compression = get_compression_type(optarg)) == -1)
-			{
-				fprintf(stderr, "%s is not a known compression type\n", optarg);
-				return 2;
-			}
-			set_compression = 1;
-			break;
+			case 'm':	/* Min duration */
+				min_duration = atof(optarg);
+				set_min_duration = 1;
+				break;
 
-                  case 't':	/* format type */
-			if ((format = get_format_type(optarg)) == -1)
-			{
-				fprintf(stderr, "%s is an unknown output format\n", optarg);
-				return 2;
-			}
-			set_format = 1;
-			break;
+			case 'x':	/* Max duration */
+				max_duration = atof(optarg);
+				set_max_duration = 1;
+				break;
 
-		  case 'm':	/* Min duration */
-			min_duration = atof(optarg);
-			set_min_duration = 1;
-			break;
+			case 'l':	/* Detect level */
+				detect_level = atoi(optarg);
+				set_detect_level = 1;
+				break;
 
-		  case 'x':	/* Max duration */
-			max_duration = atof(optarg);
-			set_max_duration = 1;
-			break;
+			case 'h':	/* Help -- display usage */
+				show_help = 1;
+				break;
 
-		  case 'l':	/* Detect level */
-			detect_level = atoi(optarg);
-			set_detect_level = 1;
-			break;
+			case 'c':	/* Configuration-file */
+				configfile = strdup(optarg);
+				break;
 
-		  case 'r':	/* Sample rate */
-			sample_rate = atoi(optarg);
-			set_sample_rate = 1;
-			break;
-			
-		  case 'h':	/* Help -- display usage */
-			show_help = 1;
-			break;
+			case 's':	/* Be silent.. */
+				silent = 1;
+				break;
 
-		  case 'c':	/* Configuration-file */
-			configfile = strdup(optarg);
-			break;
+			case 'p':	/* read from pipe */
+				from_pipe = 1;
+				set_from_pipe = 1;
+				break;
 
-		  case 's':	/* Be silent.. */
-			silent = 1;
-			break;
-
-		  case 'p':	/* read from pipe */
-			from_pipe = 1;
-			set_from_pipe = 1;
-			break;
-
-		  case 'z':	/* number of channels */
-			channels = atoi(optarg);
-			set_channels = 1;
-			break;
-
-		  default:
-			/* unknown switch */
-			show_help = 1;
-			break;
+			default:
+				/* unknown switch */
+				show_help = 1;
+				break;
 		} /* switch.. */	
 
 	} /* while.. */
 
 	if (silent == 0)
-		printf("listener v" VERSION ", (C)2003-2005 by folkert@vanheusden.com\n");
+		printf("listener v" VERSION ", (C)2003-2011 by folkert@vanheusden.com\n");
 
-	if (from_pipe && channels > 1)
+	if (from_pipe && audio_pars -> channels > 1)
 	{
 		fprintf(stderr, "You can only monitor 1 channel when reading from a pipe!\n");
 		return 1;
@@ -681,19 +608,19 @@ int main(int argc, char *argv[])
 		usage();	
 		return 1;
 	}
-	
+
 	/* Apply default settings;
 	 */
 	if (configfile == NULL) configfile = strdup( CONFIGFILE );
 	if (wav_path == NULL) wav_path = strdup( WAV_PATH );
 
 	fh = fopen(configfile, "rb");
-        if (!fh)
-        {
-                fh = fopen("listener.conf", "rb");
-                if (fh)
-                        printf("Using listener.conf from current directory\n");
-        }
+	if (!fh)
+	{
+		fh = fopen("listener.conf", "rb");
+		if (fh)
+			printf("Using listener.conf from current directory\n");
+	}
 	if (!fh) 
 		error_exit("error opening configfile %s\n", configfile);
 
@@ -704,15 +631,15 @@ int main(int argc, char *argv[])
 		if (!line)
 			break;
 
-                /* find '=' */
-                i_is = strchr(line, '=');
-                if (i_is)
-                {
+		/* find '=' */
+		i_is = strchr(line, '=');
+		if (i_is)
+		{
 			int len;
 
-                        /* find start of parameter(s) */
-                        par = i_is+1;
-                        while ((*par) == ' ') par++;
+			/* find start of parameter(s) */
+			par = i_is+1;
+			while ((*par) == ' ') par++;
 
 			len = strlen(par) - 1;
 			while(len > 0 && par[len] == ' ')
@@ -722,8 +649,8 @@ int main(int argc, char *argv[])
 			}
 
 			*i_is = 0x00;
-                }
-                cmd = get_token(line);
+		}
+		cmd = get_token(line);
 
 		if (strcasecmp(cmd, "wav_path") == 0)
 		{
@@ -739,11 +666,6 @@ int main(int argc, char *argv[])
 		{
 			if (!set_pidfile)
 				pidfile = strdup(par);
-		}
-		else if (strcasecmp(cmd, "devname") == 0)
-		{
-			if (!set_dev_name)
-				pcm_name = strdup(par);
 		}
 		else if (strcasecmp(cmd, "detect_level") == 0)
 		{
@@ -769,11 +691,6 @@ int main(int argc, char *argv[])
 			if (!set_max_duration)
 				max_duration = atof(par);
 		}
-		else if (strcasecmp(cmd, "sample_rate") == 0)
-		{
-			if (!set_sample_rate)
-				sample_rate = atoi(par);
-		}
 		else if (strcasecmp(cmd, "fname_template") == 0)
 		{
 			fname_template = strdup(par);
@@ -798,19 +715,6 @@ int main(int argc, char *argv[])
 					one_shot = 0;
 			}
 		}
-		else if (strcasecmp(cmd, "compression") == 0)
-		{
-			if (!set_compression)
-			{
-				if ((compression = get_compression_type( par )) == -1)
-					error_exit("%s is an unknown compression format\n");
-			}
-		}
-		else if (strcasecmp(cmd, "format") == 0)
-		{
-			if (!set_format && (format = get_format_type( par )) == -1)
-				error_exit("%s is an unknown output format\n");
-		}
 		else if (strcasecmp(cmd, "exec") == 0)
 		{
 			if (!set_exec)
@@ -821,10 +725,10 @@ int main(int argc, char *argv[])
 			if (!set_on_event_start)
 				on_event_start = strdup(par);
 		}
-		else if (strcasecmp(cmd, "channels") == 0)
+		else if (strcasecmp(cmd, "audio_parameters") == 0)
 		{
-			if (!set_channels)
-				channels = atoi(par);
+			if (!set_audio_parameters)
+				audio_pars = sf_parse_settings(par);
 		}
 		else if (strcasecmp(cmd, "fixed_amplify") == 0)
 		{
@@ -855,11 +759,10 @@ int main(int argc, char *argv[])
 		{
 			if (n_filter_lib < MAX_N_LIBRARIES)
 			{
-                                char *dummy = strchr(par, ' ');
+				char *dummy = strchr(par, ' ');
 
-                                dlerror();
+				dlerror();
 
-                                if (dummy) *dummy = 0x00;
 				filter[n_filter_lib].library = dlopen(par, RTLD_NOW);
 				if (!filter[n_filter_lib].library)
 					error_exit("Failed to load filter library %s, reason: %s\n", par, dlerror());
@@ -872,7 +775,10 @@ int main(int argc, char *argv[])
 				if (!filter[n_filter_lib].do_filter)
 					error_exit("The filter library %s is missing the 'do_library' function");
 
-                                filter[n_filter_lib].par = dummy+1 ? strdup(dummy+1) : NULL;
+				filter[n_filter_lib].par = NULL;
+				dummy = strchr(par, ' ');
+				if (dummy)
+					filter[n_filter_lib].par = *(dummy+1) ? strdup(dummy+1) : NULL;
 
 				n_filter_lib++;
 			}
@@ -882,8 +788,9 @@ int main(int argc, char *argv[])
 		else if (strcasecmp(cmd, "safe_after_filter") == 0)
 		{
 			if (strcasecmp(par, "yes") == 0 ||
-			    strcasecmp(par, "on") == 0 ||
-			    strcasecmp(par, "1") == 0)
+					strcasecmp(par, "on") == 0 ||
+					strcasecmp(par, "true") == 0 ||
+					strcasecmp(par, "1") == 0)
 			{
 				safe_after_filter = 1;
 			}
@@ -909,15 +816,24 @@ int main(int argc, char *argv[])
 	if (min_duration < 1)
 		error_exit("min_duration must be at least 1!");
 
+	if (!audio_pars)
+		audio_pars = &dummy_apars;
+	if (silent == 0)
+		printf("Trying %d...\n", audio_pars -> samplerate);
+
+	/* Initialize audio-device */
+	printf("**********************************************\n");
+	pcm_handle = paudio_init(&audio_pars -> samplerate, audio_pars -> channels);
+
 	/* set audio-device to 44.1KHz 16bit mono */
 	if (silent == 0)
 	{
+		printf("*********************************************\n");
 		printf("Path:          %s\n", wav_path);
-		printf("Device:        %s\n", pcm_name);
 		printf("Level:         %d\n", detect_level);
 		printf("Min duration:  %f\n", min_duration);
 		printf("Max duration:  %f\n", max_duration);
-		printf("Channels:      %d\n", channels);
+		printf("Channels:      %d\n", audio_pars -> channels);
 		printf("Number of seconds record before sound starts: %d\n", pr_n_seconds);
 		if (amplify)
 		{
@@ -925,21 +841,16 @@ int main(int argc, char *argv[])
 			printf("Start amplify: %f\n", start_amplify);
 			if (!fixed_ampl_fact) printf("Max. amplify:  %f\n", max_amplify);
 		}
-
 		if (from_pipe)
 			printf("Reading from pipe\n");
+		printf("Samplerate:    %d\n", audio_pars -> samplerate);
+		printf("**********************************************\n");
 	}
-
-	/* open audio-device */
-	pcm_handle = init_alsa(pcm_name, &sample_rate, channels);
-
-	if (!silent)
-		printf("Samplerate:    %d\n", sample_rate);
 
 	/* initialize filters */
 	for(loop=0; loop<n_filter_lib; loop++)
 	{
-		filter[loop].lib_data = filter[loop].init_library(sizeof(short), channels, sample_rate, filter[loop].par);
+		filter[loop].lib_data = filter[loop].init_library(sizeof(short), audio_pars -> channels, audio_pars -> samplerate, filter[loop].par);
 	}
 
 	if (!do_not_fork)
@@ -962,14 +873,15 @@ int main(int argc, char *argv[])
 	}
 
 	/* allocate & clear ringbuffer */
-	pr_buffers = (short **)mymalloc(sizeof(short *) * pr_n_seconds, "ring buffer");
+	pr_buffers = (short **) mymalloc (sizeof(short *) * pr_n_seconds, "ring buffer");
 	memset(pr_buffers, 0x00, sizeof(short *) * pr_n_seconds);
 
-	syslog(LOG_INFO, "listener started");
+	error_syslog ("INFO: listener started");
 
 	signal(SIGTERM, sigh);
 	signal(SIGCHLD, SIG_IGN);
 
+	int cur_buffer = 0;
 	for(;do_exit == 0;)
 	{
 		int threshold_count = 0;
@@ -978,21 +890,21 @@ int main(int argc, char *argv[])
 		/* allocate recording buffer */
 		if (!pr_buffers[cur_buffer])
 		{
-			pr_buffers[cur_buffer] = (short *)mymalloc(sample_rate * channels * sizeof(short), "recording buffer(1)");
+			pr_buffers[cur_buffer] = (short *) mymalloc (2 * audio_pars -> samplerate * audio_pars -> channels * sizeof(short), "recording buffer(1)");
 		}
 
 		/* check audio-level */
 		/* read data */
-		get_audio_1s(pcm_handle, pr_buffers[cur_buffer], sample_rate, channels);
+		paudio_get_1s (pcm_handle, pr_buffers[cur_buffer], audio_pars -> samplerate, audio_pars -> channels);
 
 		/* do filters (if any) */
 		for(loop=0; loop<n_filter_lib; loop++)
 		{
-			filter[loop].do_filter(filter[loop].lib_data, (void *)pr_buffers[cur_buffer], sample_rate);
+			filter[loop].do_filter(filter[loop].lib_data, (void *)pr_buffers[cur_buffer], audio_pars -> samplerate);
 		}
 
 		/* check audio-levels */
-		for(loop=0; loop<(sample_rate * channels); loop++)
+		for(loop=0; loop<(audio_pars -> samplerate * audio_pars -> channels); loop++)
 		{
 			if (unlikely(abs(pr_buffers[cur_buffer][loop]) > detect_level))
 			{
@@ -1000,7 +912,11 @@ int main(int argc, char *argv[])
 
 				if (threshold_count >= min_duration)
 				{
-					record(pcm_handle, cur_buffer, sample_rate, channels);
+					if (!do_not_fork && !silent)
+						printf("Recording...\n");
+					record(pcm_handle, cur_buffer, audio_pars);
+					if (!do_not_fork && !silent)
+						printf(" recording finished.\n");
 
 					if (one_shot)
 						do_exit = 1;
@@ -1020,5 +936,5 @@ int main(int argc, char *argv[])
 			error_exit("failed to delete pid-file (%s)", pidfile);
 	}
 
-	return 0;
+	return ((int) Pa_CloseStream (pcm_handle));
 }
