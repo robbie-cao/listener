@@ -181,8 +181,7 @@ SF_INFO *sf_parse_settings(char *settings)
 
 	free(work);
 
-	result = (SF_INFO *)malloc(sizeof(SF_INFO));
-	memset(result, 0x00, sizeof(SF_INFO));
+	result = (SF_INFO *)calloc(1, sizeof(SF_INFO));
 
 	result -> samplerate = sample_rate;
 	result -> channels = channels;

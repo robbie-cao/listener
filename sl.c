@@ -86,6 +86,9 @@ int main(int argc, char *argv[])
 
                 if (strcasecmp(cmd, "filter") == 0)
                 {
+			if (!par)
+				error_exit("filter: parameter missing");
+
                         if (n_filter_lib < MAX_N_LIBRARIES)
                         {
 				char *dummy = strchr(par, ' ');

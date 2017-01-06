@@ -1,4 +1,4 @@
-VERSION=2.0.1
+VERSION=2.2
 
 INSTALL_PREFIX=/usr/local
 
@@ -18,7 +18,8 @@ listener: $(OBJSli)
 install: setlistener listener
 	cp setlistener $(INSTALL_PREFIX)/bin
 	cp listener $(INSTALL_PREFIX)/bin
-	cp listener.conf $(INSTALL_PREFIX)/etc/
+	test -e $(INSTALL_PREFIX)/etc/listener.conf || cp listener.conf $(INSTALL_PREFIX)/etc
+	test -e $(INSTALL_PREFIX)/etc/listener.conf && cp listener.conf $(INSTALL_PREFIX)/etc/listener.conf.new
 
 uninstall: clean
 	rm -f $(INSTALL_PREFIX)/bin/setlistener

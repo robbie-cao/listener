@@ -50,7 +50,7 @@ short **pr_buffers;					/* buffers for recording before the sound start */
 
 int n_filter_lib = 0;					/* filters */
 filter_lib filter[MAX_N_LIBRARIES];
-char safe_after_filter = 0;
+char save_after_filter = 0;
 
 char do_exit = 0;
 
@@ -85,6 +85,7 @@ void start_wavfile(SNDFILE **sndfile_out, char *fname, SF_INFO *pars)
 		int index;
 
 		strcpy(fname, wav_path);
+		strcat(fname, "/");
 		index = strlen(fname);
 
 		for(loop=0; loop<len; loop++)
@@ -151,7 +152,7 @@ void start_wavfile(SNDFILE **sndfile_out, char *fname, SF_INFO *pars)
 	/* create file */
 	*sndfile_out = sf_open(fname, SFM_WRITE, pars);
 	if (!*sndfile_out)
-		error_exit("Could not create file %s!", fname);
+		error_exit("Can not create file %s", fname);
 
 	/* add string describing 'listener' to file */
 	(void)sf_set_string(*sndfile_out, SF_STR_SOFTWARE, "Generated with listener v" VERSION ", http://www.vanheusden.com/listener/");
@@ -162,7 +163,7 @@ void start_wavfile(SNDFILE **sndfile_out, char *fname, SF_INFO *pars)
 	(void)sf_set_string(*sndfile_out, SF_STR_DATE, ts);
 
 	error_syslog ("INFO: Started recording to %s", fname);
-	if (do_not_fork) printf("Started recording to %s\n", fname);
+	if (!silent) printf("Started recording to %s\n", fname);
 }
 
 void start_wav_file_processor(char *fname)
@@ -171,15 +172,13 @@ void start_wav_file_processor(char *fname)
 	{
 		pid_t pid;
 
-		error_syslog ("INFO: Starting childprocess: %s", exec);
-		if (do_not_fork) printf("Starting childprocess: %s\n", exec);
+		error_syslog("INFO: Starting childprocess: %s", exec);
+		if (!silent) printf("Starting childprocess: %s\n", exec);
 
 		pid = fork();
 
 		if (pid == -1)
-		{
-			error_syslog ("ERROR: Failed to fork! %m");
-		}
+			error_syslog("ERROR: Failed to fork! %m");
 		else if (pid == 0)
 		{
 			if (-1 == execlp(exec, exec, fname, (void *)NULL))
@@ -195,7 +194,7 @@ void start_on_event_start(void)
 		pid_t pid;
 
 		error_syslog ("INFO: Starting childprocess: %s", exec);
-		if (do_not_fork) printf("Starting childprocess: %s\n", exec);
+		if (!silent) printf("Starting childprocess: %s\n", exec);
 
 		pid = fork();
 
@@ -245,7 +244,7 @@ void do_amplify(short *buffer, int n_samples, double *factor)
 		amp = min(max_amplify, amp);
 		*factor = (*factor + amp) / 2;
 
-		if (do_not_fork) printf("New factor: %f\r", *factor);
+		if (!silent) printf("New factor: %f\r", *factor);
 	}
 
 	/* amplify */
@@ -296,9 +295,7 @@ void record(PaStream *pcm_handle, int cur_buffer, SF_INFO *file_pars)
 	start_on_event_start();
 
 	buffer = (short *) mymalloc (2 * buffer_size, "recording buffer(2)");
-	if (!safe_after_filter) temp_buffer = (short *) mymalloc (2 * buffer_size, "recording buffer(3)");
-
-	if (!silent && do_not_fork) printf("Sound detected\n");
+	if (!save_after_filter) temp_buffer = (short *) mymalloc (2 * buffer_size, "recording buffer(3)");
 
 	if (output_pipe)
 		pipe_fd = start_piped_proc(output_pipe);
@@ -309,7 +306,7 @@ void record(PaStream *pcm_handle, int cur_buffer, SF_INFO *file_pars)
 	start_of_wavfile_ts = sound_detected_ts = now_ts = start_of_recording_ts;
 
 	/* write the samples to disk which we already had recorded before the sound started */
-	if (!silent && do_not_fork) printf("Writing pre-sound data to disk\n");
+	if (!silent) printf("Writing pre-sound data to disk\n");
 	for(loop=0; loop<pr_n_seconds; loop++)
 	{
 		int n_wr;
@@ -333,7 +330,7 @@ void record(PaStream *pcm_handle, int cur_buffer, SF_INFO *file_pars)
 		}
 	}
 
-	if (!silent && do_not_fork) printf("Started recording...\n");
+	if (!silent) printf("Started recording...\n");
 
 	for(; do_exit == 0; )
 	{
@@ -344,7 +341,7 @@ void record(PaStream *pcm_handle, int cur_buffer, SF_INFO *file_pars)
 		paudio_get_1s (pcm_handle, buffer, sample_rate, channels);
 
 		/* when we want to save unfiltered sound, make a copy first */
-		if (!safe_after_filter)
+		if (!save_after_filter)
 		{
 			memcpy(temp_buffer, buffer, buffer_size);
 		}
@@ -358,7 +355,7 @@ void record(PaStream *pcm_handle, int cur_buffer, SF_INFO *file_pars)
 
 		/* after filtering, do we still hear sound? */
 		threshold_count = check_for_sound(buffer, sample_rate * channels) / channels;
-		if (do_not_fork)
+		if (!silent)
 		{
 			if (threshold_count < min_triggers)
 				printf("Silence?\n");
@@ -368,16 +365,16 @@ void record(PaStream *pcm_handle, int cur_buffer, SF_INFO *file_pars)
 
 		/* amplify sound before store */
 		if (amplify)
-			do_amplify(safe_after_filter?buffer:temp_buffer, sample_rate * channels, &factor);
+			do_amplify(save_after_filter?buffer:temp_buffer, sample_rate * channels, &factor);
 
 		/* write sample to disk */
 		if (output_pipe)
 		{
-			WRITE(pipe_fd, (char *)(safe_after_filter?buffer:temp_buffer), sample_rate * channels * sizeof(short));
+			WRITE(pipe_fd, (char *)(save_after_filter?buffer:temp_buffer), sample_rate * channels * sizeof(short));
 		}
 		else
 		{
-			if ((n_wr = sf_write_short(sndfile_out, safe_after_filter?buffer:temp_buffer, sample_rate * channels)) != sample_rate * channels)
+			if ((n_wr = sf_write_short(sndfile_out, save_after_filter?buffer:temp_buffer, sample_rate * channels)) != sample_rate * channels)
 				error_exit("failed to write to wav-file: %s (%d)\n", sf_strerror(sndfile_out), n_wr);
 		}
 
@@ -386,7 +383,7 @@ void record(PaStream *pcm_handle, int cur_buffer, SF_INFO *file_pars)
 		/* did things got silent AND we recorded longer then the minimum duration AND the silence is longer then some thresholdvalue? */
 		if (threshold_count < min_triggers && (now_ts - start_of_recording_ts) > min_duration && (now_ts - sound_detected_ts) > rec_silence)
 		{
-			if (do_not_fork) printf("Stopped recording: %d peaks\n", threshold_count);
+			if (!silent) printf("Stopped recording: %d triggers\n", threshold_count);
 			/*  then exit */
 			break;
 		}
@@ -400,7 +397,7 @@ void record(PaStream *pcm_handle, int cur_buffer, SF_INFO *file_pars)
 		/* took too long? then start new file */
 		if (max_duration != -1 && (now_ts - start_of_wavfile_ts) > max_duration)
 		{
-			if (do_not_fork) printf("Splitting up audio-file\n");
+			if (!silent) printf("Splitting up audio-file\n");
 
 			if (!output_pipe)
 				sf_close(sndfile_out);
@@ -436,7 +433,7 @@ void record(PaStream *pcm_handle, int cur_buffer, SF_INFO *file_pars)
 		close(pipe_fd);
 
 	error_syslog ("INFO: Stopped recording (%d seconds)", (int)(now_ts - start_of_recording_ts));
-	if (do_not_fork) printf("Stopped recording (%d seconds)\n", (int)(now_ts - start_of_recording_ts));
+	if (!silent) printf("Stopped recording (%d seconds)\n", (int)(now_ts - start_of_recording_ts));
 }
 
 void sigh(int sig)
@@ -595,7 +592,7 @@ int main(int argc, char *argv[])
 	} /* while.. */
 
 	if (silent == 0)
-		printf("listener v" VERSION ", (C)2003-2011 by folkert@vanheusden.com\n");
+		printf("listener v" VERSION ", (C)2003-2013 by folkert@vanheusden.com\n");
 
 	if (from_pipe && audio_pars -> channels > 1)
 	{
@@ -759,8 +756,6 @@ int main(int argc, char *argv[])
 		{
 			if (n_filter_lib < MAX_N_LIBRARIES)
 			{
-				char *dummy = strchr(par, ' ');
-
 				dlerror();
 
 				filter[n_filter_lib].library = dlopen(par, RTLD_NOW);
@@ -776,7 +771,7 @@ int main(int argc, char *argv[])
 					error_exit("The filter library %s is missing the 'do_library' function");
 
 				filter[n_filter_lib].par = NULL;
-				dummy = strchr(par, ' ');
+				char *dummy = strchr(par, ' ');
 				if (dummy)
 					filter[n_filter_lib].par = *(dummy+1) ? strdup(dummy+1) : NULL;
 
@@ -785,18 +780,18 @@ int main(int argc, char *argv[])
 			else
 				error_exit("Too many filters defined, only %d possible.\n", MAX_N_LIBRARIES);
 		}
-		else if (strcasecmp(cmd, "safe_after_filter") == 0)
+		else if (strcasecmp(cmd, "save_after_filter") == 0 || strcasecmp(cmd, "safe_after_filter") == 0)
 		{
 			if (strcasecmp(par, "yes") == 0 ||
 					strcasecmp(par, "on") == 0 ||
 					strcasecmp(par, "true") == 0 ||
 					strcasecmp(par, "1") == 0)
 			{
-				safe_after_filter = 1;
+				save_after_filter = 1;
 			}
 			else
 			{
-				safe_after_filter = 0;
+				save_after_filter = 0;
 			}
 		}
 		else if (strcasecmp(cmd, "prerecord_n_seconds") == 0)
@@ -829,21 +824,22 @@ int main(int argc, char *argv[])
 	if (silent == 0)
 	{
 		printf("*********************************************\n");
-		printf("Path:          %s\n", wav_path);
-		printf("Level:         %d\n", detect_level);
-		printf("Min duration:  %f\n", min_duration);
-		printf("Max duration:  %f\n", max_duration);
-		printf("Channels:      %d\n", audio_pars -> channels);
-		printf("Number of seconds record before sound starts: %d\n", pr_n_seconds);
+		printf("path:          %s\n", wav_path);
+		printf("level:         %d\n", detect_level);
+		printf("min duration:  %f\n", min_duration);
+		printf("max duration:  %f\n", max_duration);
+		printf("# triggers:    %d\n", min_triggers);
+		printf("channels:      %d\n", audio_pars -> channels);
+		printf("number of seconds of sound to store before sound starts (before the level was reached): %d\n", pr_n_seconds);
 		if (amplify)
 		{
 			if (fixed_ampl_fact) printf("Using fixed amplification\n");
-			printf("Start amplify: %f\n", start_amplify);
+			printf("start amplify: %f\n", start_amplify);
 			if (!fixed_ampl_fact) printf("Max. amplify:  %f\n", max_amplify);
 		}
 		if (from_pipe)
-			printf("Reading from pipe\n");
-		printf("Samplerate:    %d\n", audio_pars -> samplerate);
+			printf("reading from pipe\n");
+		printf("samplerate:    %d\n", audio_pars -> samplerate);
 		printf("**********************************************\n");
 	}
 
@@ -873,10 +869,10 @@ int main(int argc, char *argv[])
 	}
 
 	/* allocate & clear ringbuffer */
-	pr_buffers = (short **) mymalloc (sizeof(short *) * pr_n_seconds, "ring buffer");
+	pr_buffers = (short **)mymalloc(sizeof(short *) * pr_n_seconds, "ring buffer");
 	memset(pr_buffers, 0x00, sizeof(short *) * pr_n_seconds);
 
-	error_syslog ("INFO: listener started");
+	error_syslog("INFO: listener started");
 
 	signal(SIGTERM, sigh);
 	signal(SIGCHLD, SIG_IGN);
@@ -884,18 +880,19 @@ int main(int argc, char *argv[])
 	int cur_buffer = 0;
 	for(;do_exit == 0;)
 	{
+		double avg_level = 0;
 		int threshold_count = 0;
 		int loop;
 
 		/* allocate recording buffer */
 		if (!pr_buffers[cur_buffer])
 		{
-			pr_buffers[cur_buffer] = (short *) mymalloc (2 * audio_pars -> samplerate * audio_pars -> channels * sizeof(short), "recording buffer(1)");
+			pr_buffers[cur_buffer] = (short *)mymalloc(2 * audio_pars -> samplerate * audio_pars -> channels * sizeof(short), "recording buffer(1)");
 		}
 
 		/* check audio-level */
 		/* read data */
-		paudio_get_1s (pcm_handle, pr_buffers[cur_buffer], audio_pars -> samplerate, audio_pars -> channels);
+		paudio_get_1s(pcm_handle, pr_buffers[cur_buffer], audio_pars -> samplerate, audio_pars -> channels);
 
 		/* do filters (if any) */
 		for(loop=0; loop<n_filter_lib; loop++)
@@ -906,24 +903,28 @@ int main(int argc, char *argv[])
 		/* check audio-levels */
 		for(loop=0; loop<(audio_pars -> samplerate * audio_pars -> channels); loop++)
 		{
-			if (unlikely(abs(pr_buffers[cur_buffer][loop]) > detect_level))
-			{
+			int cur = abs(pr_buffers[cur_buffer][loop]);
+
+			avg_level += cur;
+
+			if (cur >= detect_level)
 				threshold_count++;
+		}
 
-				if (threshold_count >= min_duration)
-				{
-					if (!do_not_fork && !silent)
-						printf("Recording...\n");
-					record(pcm_handle, cur_buffer, audio_pars);
-					if (!do_not_fork && !silent)
-						printf(" recording finished.\n");
+		if (threshold_count >= min_triggers)
+		{
+			if (!silent)
+				printf("Sound detected, recording... (average level: %f, triggers: %d)\n", avg_level / (double)loop, threshold_count);
+			record(pcm_handle, cur_buffer, audio_pars);
+			if (!silent)
+				printf(" recording finished.\n");
 
-					if (one_shot)
-						do_exit = 1;
-
-					break;
-				}
-			}
+			if (one_shot)
+				do_exit = 1;
+		}
+		else if (!silent)
+		{
+			printf("%f average level: %f, triggers: %d\n", get_ts(), avg_level / (double)loop, threshold_count);
 		}
 
 		if (++cur_buffer == pr_n_seconds)
@@ -936,5 +937,5 @@ int main(int argc, char *argv[])
 			error_exit("failed to delete pid-file (%s)", pidfile);
 	}
 
-	return ((int) Pa_CloseStream (pcm_handle));
+	return (int)Pa_CloseStream(pcm_handle);
 }

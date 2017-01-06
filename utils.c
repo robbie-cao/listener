@@ -79,7 +79,7 @@ int resize(void **pnt, size_t n, size_t *len, size_t size)
 		*len = dummylen;
 		*pnt = dummypnt;
         }
-	else if (n > *len || n<0 || *len<0)
+	else if (n > *len || n<0)
 		error_exit("resize: fatal memory corruption problem: n > len || n<0 || len<0!");
 
 	return 0;
